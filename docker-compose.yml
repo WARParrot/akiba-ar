@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: akiba
+      POSTGRES_USER: akiba
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U akiba"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: ./server
+    ports:
+      - "${PORT:-3100}:3100"
+    environment:
+      DATABASE_URL: postgres://akiba:${POSTGRES_PASSWORD:-changeme}@db/akiba
+      JWT_SECRET: ${JWT_SECRET:?required}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?required}
+      RESIDENTS_CHAT_ID: ${RESIDENTS_CHAT_ID:?required}
+      LOCAL_SERVER: ${LOCAL_SERVER:-0}
+      PORT: 3100
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
