@@ -2,7 +2,7 @@ import express from 'express';
 import type { Pool } from 'pg';
 import { authenticate, onsite, requireOnsite, requireRole, sign, type AuthedRequest } from './auth.js';
 import { sanitizeHintHtml } from './hintHtml.js';
-import { isChannelMember, verifyLogin, type TelegramLogin } from './telegram.js';
+import { isChannelMember, sendBotMessage, verifyLogin, type TelegramLogin } from './telegram.js';
 import type { Hint, HintType, Role, User, Visibility } from './types.js';
 
 const HINT_TYPES: HintType[] = ['practical', 'lore', 'joke'];
@@ -267,6 +267,16 @@ export function createApp(db: Pool) {
        VALUES ($1, $2, now() + make_interval(mins => $3::int)) RETURNING id, marker_id, species_id, expires_at`,
       [marker_id, species_id, ttl_minutes ?? 30],
     );
+    // Rare-species notification: fire-and-forget so Telegram latency never slows the response.
+    const rarityThreshold = Number(process.env.RARE_SPAWN_MIN_RARITY ?? 4);
+    const species = await db.query('SELECT name, rarity FROM creature_species WHERE id = $1', [species_id]);
+    const sp = species.rows[0];
+    if (sp && sp.rarity >= rarityThreshold) {
+      const chat = process.env.RESIDENTS_CHAT_ID;
+      if (chat && /^-?\d+$/.test(chat)) {
+        sendBotMessage(Number(chat), `${sp.name} (rarity ${sp.rarity}) just spawned!`).catch(() => {});
+      }
+    }
     res.status(201).json({ spawn: rows[0] });
   });
 
