@@ -15,7 +15,8 @@ Quick guide to the contribution workflow. All changes land on `master` via pull 
    git push origin feature/my-change
    ```
 4. **Open a PR** against `master` (via GitHub web, or `gh pr create` / the REST API).
-5. After review, **merge** in the GitHub UI (or via API with Pull requests: write).
+5. **Wait for maintainer review** — every PR must be reviewed by the repo owner before merge. Do not merge your own PRs without explicit approval.
+6. Once approved, **merge** in the GitHub UI (or via API with Pull requests: write).
 
 ## Branch rules (verified 2026-09-19)
 
