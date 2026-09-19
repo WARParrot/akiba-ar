@@ -14,12 +14,15 @@ const HINT_TYPES: HintType[] = ['practical', 'lore', 'joke'];
 // Reads/earning higher than spends; catches bounded tighter (flood + first-writer-wins already bounds races).
 const SPEND_LIMIT = Number(process.env.RATE_LIMIT_SPEND ?? 30);
 const VIEW_LIMIT = Number(process.env.RATE_LIMIT_VIEW ?? 120);
+// #9: dedicated, tighter limit on POST /auth/telegram — pre-auth HMAC brute-force guard.
+// Generous enough for real logins, far below the shared spend limit. IP-keyed (no claims yet).
+const AUTH_LIMIT = Number(process.env.RATE_LIMIT_AUTH ?? 10);
 const VISIBILITIES: Visibility[] = ['public', 'residents', 'private'];
 
 export function createApp(db: Pool) {
   const app = express();
   app.use(express.json({ limit: '64kb' }));
-  const authLimit = createFixedWindowLimiter({ limit: SPEND_LIMIT, windowMs: 60_000 });
+  const authLimit = createFixedWindowLimiter({ limit: AUTH_LIMIT, windowMs: 60_000 });
   const viewLimit = createFixedWindowLimiter({ limit: VIEW_LIMIT, windowMs: 60_000 });
   const spendLimit = createFixedWindowLimiter({ limit: SPEND_LIMIT, windowMs: 60_000 });
   const rlAuth = rateLimit(authLimit);
