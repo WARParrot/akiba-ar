@@ -5,6 +5,7 @@ import { WebView } from 'react-native-webview';
 import * as api from './src/api';
 import type { Capture, Hint, Spawn, User } from './src/types';
 import { addMarker, updateMarker, type MarkerResult } from './src/markerState';
+import { creatureAppearance, creatureLabel } from './src/creaturePresentation';
 
 
 type Screen = 'login' | 'ar' | 'feed' | 'collection';
@@ -126,8 +127,8 @@ function ARScreen(p: { user: User; onsite: boolean; permission: any; requestPerm
           {p.markers.map((marker) => <View key={marker.markerId}>
             <Text style={s.panelTitle}>Marker: {marker.markerId}</Text>
             {marker.hints.map((h) => <HintCard key={h.id} hint={h} />)}
-            {marker.spawns.map((sp) => <View key={sp.id} style={s.spawn}>
-                <Text>{sp.name} (rarity {sp.rarity})</Text>
+            {marker.spawns.map((sp) => <View key={sp.id} style={[s.spawn, creatureAppearance(sp).color ? { backgroundColor: creatureAppearance(sp).color } : null]}>
+                <Text>{creatureAppearance(sp).emoji ?? ''} {creatureLabel(sp)} (rarity {sp.rarity})</Text>
                 <Button title="Catch" onPress={() => catchCreature(sp.id)} />
               </View>)}
             {p.user.role !== 'guest' && p.onsite && <Button title="+ Add Hint" onPress={() => setAddHintMarker(marker.markerId)} />}
@@ -221,8 +222,8 @@ function CollectionScreen() {
     <ScrollView style={s.container}>
       <Text style={s.sectionTitle}>Your Collection</Text>
       {coll.map((c) => (
-        <View key={c.species_id} style={s.captureRow}>
-          <Text>{c.name} x{c.count} (rarity {c.rarity})</Text>
+        <View key={c.species_id} style={[s.captureRow, c.appearance?.color ? { backgroundColor: c.appearance.color } : null]}>
+          <Text>{c.appearance?.emoji ?? ''} {creatureLabel(c)} x{c.count} (rarity {c.rarity})</Text>
         </View>
       ))}
       <Text style={s.sectionTitle}>Leaderboard</Text>

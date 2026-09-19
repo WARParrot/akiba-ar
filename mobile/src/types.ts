@@ -31,6 +31,8 @@ export interface Spawn {
   name: string;
   rarity: number;
   expires_at: string;
+  variant_name?: string | null;
+  appearance?: { color?: string; emoji?: string; sprite?: string } | null;
 }
 
 export interface Capture {
@@ -39,6 +41,8 @@ export interface Capture {
   rarity: number;
   count: number;
   latest: string;
+  variant_name?: string | null;
+  appearance?: { color?: string; emoji?: string; sprite?: string } | null;
 }
 
 export interface SessionInfo {
