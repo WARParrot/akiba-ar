@@ -2,13 +2,13 @@ import express from 'express';
 import type { Pool } from 'pg';
 import { authenticate, onsite, requireOnsite, requireRole, sign, type AuthedRequest } from './auth.js';
 import { sanitizeHintHtml } from './hintHtml.js';
-import { createRateLimiter, rateLimit } from './rateLimit.js';
+import { createFixedWindowLimiter, rateLimit } from './rateLimit.js';
 import { isChannelMember, sendBotMessage, verifyLogin, type TelegramLogin } from './telegram.js';
 import type { Hint, HintType, Role, User, Visibility } from './types.js';
 
 const HINT_TYPES: HintType[] = ['practical', 'lore', 'joke'];
 
-// Rate limits: per-user token buckets on value-moving endpoints. Generous defaults, env-tunable.
+// Rate limits: per-user fixed-window counters on value-moving endpoints. Generous defaults, env-tunable.
 // Reads/earning higher than spends; catches bounded tighter (flood + first-writer-wins already bounds races).
 const SPEND_LIMIT = Number(process.env.RATE_LIMIT_SPEND ?? 30);
 const VIEW_LIMIT = Number(process.env.RATE_LIMIT_VIEW ?? 120);
@@ -17,9 +17,9 @@ const VISIBILITIES: Visibility[] = ['public', 'residents', 'private'];
 export function createApp(db: Pool) {
   const app = express();
   app.use(express.json({ limit: '64kb' }));
-  const authLimit = createRateLimiter({ limit: SPEND_LIMIT, windowMs: 60_000 });
-  const viewLimit = createRateLimiter({ limit: VIEW_LIMIT, windowMs: 60_000 });
-  const spendLimit = createRateLimiter({ limit: SPEND_LIMIT, windowMs: 60_000 });
+  const authLimit = createFixedWindowLimiter({ limit: SPEND_LIMIT, windowMs: 60_000 });
+  const viewLimit = createFixedWindowLimiter({ limit: VIEW_LIMIT, windowMs: 60_000 });
+  const spendLimit = createFixedWindowLimiter({ limit: SPEND_LIMIT, windowMs: 60_000 });
   const rlAuth = rateLimit(authLimit);
   const rlView = rateLimit(viewLimit);
   const rlSpend = rateLimit(spendLimit);
