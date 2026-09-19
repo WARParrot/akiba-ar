@@ -177,8 +177,29 @@ export function createApp(db: Pool) {
   });
 
   app.post('/hints/:id/report', async (req, res) => {
-    await db.query('UPDATE hints SET reports = reports + 1 WHERE id = $1', [req.params.id]);
-    res.status(202).end();
+    // Auto-moderation: at the threshold, hide the hint (visibility -> private) and reset the counter.
+    // One atomic UPDATE with a scalar subquery: both SET clauses see the same computed new_reports.
+    const { rows } = await db.query(
+      `UPDATE hints
+          SET reports = (SELECT CASE WHEN h.reports + 1 >= $2::int THEN 0 ELSE h.reports + 1 END FROM hints h WHERE h.id = $1),
+              visibility = CASE WHEN (SELECT h.reports + 1 FROM hints h WHERE h.id = $1) >= $2::int THEN 'private' ELSE visibility END
+        WHERE id = $1
+        RETURNING reports`,
+      [req.params.id, Number(process.env.REPORT_THRESHOLD ?? 5)],
+    );
+    res.status(rows[0] ? 202 : 404).end();
+  });
+
+  app.post('/hints/:id/reapprove', requireRole('admin'), async (req, res) => {
+    const { rows } = await db.query(
+      `UPDATE hints SET visibility = 'public', reports = 0 WHERE id = $1 RETURNING id`,
+      [req.params.id],
+    );
+    if (!rows[0]) {
+      res.status(404).end();
+      return;
+    }
+    res.json({ hint: rows[0] });
   });
 
   // --- Scenario 4: creatures, onsite only ---
