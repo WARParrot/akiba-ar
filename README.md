@@ -54,5 +54,5 @@ See `DEPLOY.md` for QR codes, physical testing, production checklist.
 ```bash
 cd server
 PGUSER=root PGDATABASE=akiba JWT_SECRET=test npm test
-# 25/25
+# 43 tests across 7 files — all pass when PG is reachable; see test/ for per-file env requirements (offsite variants skip when the network is unavailable)
 ```
