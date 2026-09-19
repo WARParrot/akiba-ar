@@ -2,20 +2,32 @@ import express from 'express';
 import type { Pool } from 'pg';
 import { authenticate, onsite, requireOnsite, requireRole, sign, type AuthedRequest } from './auth.js';
 import { sanitizeHintHtml } from './hintHtml.js';
+import { createFixedWindowLimiter, rateLimit } from './rateLimit.js';
 import { isChannelMember, sendBotMessage, verifyLogin, type TelegramLogin } from './telegram.js';
 import type { Hint, HintType, Role, User, Visibility } from './types.js';
 
 const HINT_TYPES: HintType[] = ['practical', 'lore', 'joke'];
+
+// Rate limits: per-user fixed-window counters on value-moving endpoints. Generous defaults, env-tunable.
+// Reads/earning higher than spends; catches bounded tighter (flood + first-writer-wins already bounds races).
+const SPEND_LIMIT = Number(process.env.RATE_LIMIT_SPEND ?? 30);
+const VIEW_LIMIT = Number(process.env.RATE_LIMIT_VIEW ?? 120);
 const VISIBILITIES: Visibility[] = ['public', 'residents', 'private'];
 
 export function createApp(db: Pool) {
   const app = express();
   app.use(express.json({ limit: '64kb' }));
+  const authLimit = createFixedWindowLimiter({ limit: SPEND_LIMIT, windowMs: 60_000 });
+  const viewLimit = createFixedWindowLimiter({ limit: VIEW_LIMIT, windowMs: 60_000 });
+  const spendLimit = createFixedWindowLimiter({ limit: SPEND_LIMIT, windowMs: 60_000 });
+  const rlAuth = rateLimit(authLimit);
+  const rlView = rateLimit(viewLimit);
+  const rlSpend = rateLimit(spendLimit);
 
   app.get('/health', (_req, res) => res.json({ ok: true, onsite: onsite() }));
 
   // --- Scenario 1: Telegram onboarding & role assignment ---
-  app.post('/auth/telegram', async (req, res) => {
+  app.post('/auth/telegram', rlAuth, async (req, res) => {
     const body = req.body as TelegramLogin;
     const botToken = process.env.TELEGRAM_BOT_TOKEN ?? '';
     if (!botToken || !verifyLogin(body, botToken)) {
@@ -54,7 +66,7 @@ export function createApp(db: Pool) {
   });
 
   // --- Scenario 3: AR discovery. Visibility enforced in SQL, never client-side. ---
-  app.get('/markers/:id/hints', async (req: AuthedRequest, res) => {
+  app.get('/markers/:id/hints', rlView, async (req: AuthedRequest, res) => {
     const { uid, role } = req.claims!;
     const { rows } = await db.query<Hint>(
       `SELECT id, marker_id, author_id, text, html, theme, type, visibility, score
@@ -94,7 +106,7 @@ export function createApp(db: Pool) {
   });
 
   // --- Scenario 2: placing a hint. Resident+, onsite only. ---
-  app.post('/markers/:id/hints', requireRole('resident', 'admin'), requireOnsite, async (req: AuthedRequest, res) => {
+  app.post('/markers/:id/hints', rlSpend, requireRole('resident', 'admin'), requireOnsite, async (req: AuthedRequest, res) => {
     const { text, html, type, visibility, theme } = req.body as Partial<Hint>;
     if (typeof text !== 'string' || !text.trim()) {
       res.status(400).json({ error: 'text required' });
@@ -163,7 +175,7 @@ export function createApp(db: Pool) {
     res.status(rowCount ? 204 : 404).end();
   });
 
-  app.post('/hints/:id/vote', async (req: AuthedRequest, res) => {
+  app.post('/hints/:id/vote', rlSpend, async (req: AuthedRequest, res) => {
     const delta = (req.body as { delta?: number }).delta === -1 ? -1 : 1;
     const { rows } = await db.query('UPDATE hints SET score = score + $2 WHERE id = $1 RETURNING score', [
       req.params.id,
@@ -176,7 +188,7 @@ export function createApp(db: Pool) {
     res.json({ score: rows[0].score });
   });
 
-  app.post('/hints/:id/report', async (req, res) => {
+  app.post('/hints/:id/report', rlSpend, async (req, res) => {
     // Auto-moderation: at the threshold, hide the hint (visibility -> private) and reset the counter.
     // One atomic UPDATE with a scalar subquery: both SET clauses see the same computed new_reports.
     const { rows } = await db.query(
@@ -213,7 +225,7 @@ export function createApp(db: Pool) {
     res.json({ spawns: rows });
   });
 
-  app.post('/spawns/:id/catch', requireOnsite, async (req: AuthedRequest, res) => {
+  app.post('/spawns/:id/catch', rlSpend, requireOnsite, async (req: AuthedRequest, res) => {
     // Single UPDATE claims the spawn: first writer wins, no transaction needed.
     const { rows } = await db.query<{ species_id: string }>(
       `UPDATE spawns SET caught_by = $2
