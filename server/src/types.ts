@@ -41,3 +41,21 @@ export interface JwtClaims {
   uid: number;
   role: Role;
 }
+
+// --- Data-driven creature layer (#16) ---
+export interface SpeciesTemplate {
+  id: string;
+  name: string;
+  rarity: number;
+  onsite_only: boolean;
+  config: Record<string, unknown>;
+  active: boolean;
+}
+
+export interface SpeciesVariant {
+  id: string;
+  template_id: string;
+  name: string;
+  overrides: Record<string, unknown>;
+  active: boolean;
+}

@@ -10,3 +10,8 @@ export const pool = new pg.Pool(
 export async function migrate(schemaPath = new URL('../db/schema.sql', import.meta.url)) {
   await pool.query(readFileSync(schemaPath, 'utf8'));
 }
+
+// Creature data layer (#16): additive second schema file, migrated after the core one.
+export async function migrateCreatures() {
+  await pool.query(readFileSync(new URL('../db/creatures.sql', import.meta.url), 'utf8'));
+}

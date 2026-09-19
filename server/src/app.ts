@@ -3,6 +3,8 @@ import type { Pool } from 'pg';
 import { authenticate, onsite, requireOnsite, requireRole, sign, type AuthedRequest } from './auth.js';
 import { sanitizeHintHtml } from './hintHtml.js';
 import { createFixedWindowLimiter, rateLimit } from './rateLimit.js';
+import { resolveVariant } from './creatures.js';
+import type { SpeciesTemplate, SpeciesVariant } from './types.js';
 import { isChannelMember, sendBotMessage, verifyLogin, type TelegramLogin } from './telegram.js';
 import type { Hint, HintType, Role, User, Visibility } from './types.js';
 
@@ -318,6 +320,243 @@ export function createApp(db: Pool) {
       'SELECT id, marker_id, author_id, text, html, reports FROM hints WHERE reports > 0 ORDER BY reports DESC',
     );
     res.json({ hints: rows });
+  });
+
+
+  // --- Admin: creature species CRUD (#14) — species management without psql ---
+  app.get('/admin/species', requireRole('admin'), async (_req, res) => {
+    const { rows } = await db.query(
+      'SELECT id, name, rarity, onsite_only FROM creature_species ORDER BY rarity DESC, id',
+    );
+    res.json({ species: rows });
+  });
+
+  app.post('/admin/species', requireRole('admin'), async (req, res) => {
+    const { id, name, rarity, onsite_only } = req.body as {
+      id?: string; name?: string; rarity?: number; onsite_only?: boolean;
+    };
+    if (!id || !name) {
+      res.status(400).json({ error: 'id and name required' });
+      return;
+    }
+    const rar = rarity ?? 1;
+    if (!Number.isInteger(rar) || rar < 1 || rar > 5) {
+      res.status(400).json({ error: 'rarity must be an integer 1-5' });
+      return;
+    }
+    try {
+      const { rows } = await db.query(
+        `INSERT INTO creature_species (id, name, rarity, onsite_only)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, name, rarity, onsite_only`,
+        [id, name, rar, onsite_only ?? false],
+      );
+      res.status(201).json({ species: rows[0] });
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') {
+        res.status(409).json({ error: 'species id already exists' });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  app.patch('/admin/species/:id', requireRole('admin'), async (req, res) => {
+    const { name, rarity, onsite_only } = req.body as {
+      name?: string; rarity?: number; onsite_only?: boolean;
+    };
+    if (rarity !== undefined && (!Number.isInteger(rarity) || rarity < 1 || rarity > 5)) {
+      res.status(400).json({ error: 'rarity must be an integer 1-5' });
+      return;
+    }
+    // species has no deactivated state (#14 says delete/deactivate): hard delete, cascades to spawns/captures.
+    if ((req.body as { delete?: boolean }).delete) {
+      const { rowCount } = await db.query('DELETE FROM creature_species WHERE id = $1', [req.params.id]);
+      res.status(rowCount ? 204 : 404).end();
+      return;
+    }
+    const { rows } = await db.query(
+      `UPDATE creature_species SET
+         name = COALESCE($2, name),
+         rarity = COALESCE($3, rarity),
+         onsite_only = COALESCE($4, onsite_only)
+       WHERE id = $1
+       RETURNING id, name, rarity, onsite_only`,
+      [req.params.id, name ?? null, rarity ?? null, onsite_only ?? null],
+    );
+    if (!rows[0]) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+    res.json({ species: rows[0] });
+  });
+
+  // --- Admin: species templates + variants (#16) — the data-driven layer ---
+  app.get('/admin/templates', requireRole('admin'), async (_req, res) => {
+    const { rows } = await db.query<SpeciesTemplate>(
+      'SELECT id, name, rarity, onsite_only, config, active FROM species_templates ORDER BY id',
+    );
+    res.json({ templates: rows });
+  });
+
+  app.post('/admin/templates', requireRole('admin'), async (req, res) => {
+    const { id, name, rarity, onsite_only, config } = req.body as Partial<SpeciesTemplate>;
+    if (!id || !name) {
+      res.status(400).json({ error: 'id and name required' });
+      return;
+    }
+    const rar = rarity ?? 1;
+    if (!Number.isInteger(rar) || rar < 1 || rar > 5) {
+      res.status(400).json({ error: 'rarity must be an integer 1-5' });
+      return;
+    }
+    try {
+      const { rows } = await db.query<SpeciesTemplate>(
+        `INSERT INTO species_templates (id, name, rarity, onsite_only, config)
+         VALUES ($1, $2, $3, $4, $5::jsonb)
+         RETURNING id, name, rarity, onsite_only, config, active`,
+        [id, name, rar, onsite_only ?? false, JSON.stringify(config ?? {})],
+      );
+      res.status(201).json({ template: rows[0] });
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') {
+        res.status(409).json({ error: 'template id already exists' });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  app.patch('/admin/templates/:id', requireRole('admin'), async (req, res) => {
+    const { name, rarity, onsite_only, config, active, delete: del } = req.body as Partial<SpeciesTemplate> & { delete?: boolean };
+    if (rarity !== undefined && (!Number.isInteger(rarity) || rarity < 1 || rarity > 5)) {
+      res.status(400).json({ error: 'rarity must be an integer 1-5' });
+      return;
+    }
+    if (del) {
+      const { rowCount } = await db.query('DELETE FROM species_templates WHERE id = $1', [req.params.id]);
+      res.status(rowCount ? 204 : 404).end();
+      return;
+    }
+    const { rows } = await db.query<SpeciesTemplate>(
+      `UPDATE species_templates SET
+         name = COALESCE($2, name),
+         rarity = COALESCE($3, rarity),
+         onsite_only = COALESCE($4, onsite_only),
+         config = COALESCE($5::jsonb, config),
+         active = COALESCE($6, active),
+         updated_at = now()
+       WHERE id = $1
+       RETURNING id, name, rarity, onsite_only, config, active`,
+      [req.params.id, name ?? null, rarity ?? null, onsite_only ?? null,
+       config ? JSON.stringify(config) : null, active ?? null],
+    );
+    if (!rows[0]) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+    res.json({ template: rows[0] });
+  });
+
+  app.get('/admin/templates/:id/variants', requireRole('admin'), async (req, res) => {
+    const { rows } = await db.query<SpeciesVariant>(
+      'SELECT id, template_id, name, overrides, active FROM species_variants WHERE template_id = $1 ORDER BY id',
+      [req.params.id],
+    );
+    res.json({ variants: rows });
+  });
+
+  app.post('/admin/templates/:id/variants', requireRole('admin'), async (req, res) => {
+    const { id, name, overrides } = req.body as { id?: string; name?: string; overrides?: Record<string, unknown> };
+    if (!id || !name) {
+      res.status(400).json({ error: 'id and name required' });
+      return;
+    }
+    const tpl = await db.query('SELECT 1 FROM species_templates WHERE id = $1', [req.params.id]);
+    if (!tpl.rowCount) {
+      res.status(404).json({ error: 'unknown template' });
+      return;
+    }
+    try {
+      const { rows } = await db.query<SpeciesVariant>(
+        `INSERT INTO species_variants (id, template_id, name, overrides)
+         VALUES ($1, $2, $3, $4::jsonb)
+         RETURNING id, template_id, name, overrides, active`,
+        [id, req.params.id, name, JSON.stringify(overrides ?? {})],
+      );
+      res.status(201).json({ variant: rows[0] });
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') {
+        res.status(409).json({ error: 'variant id already exists' });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  // Spawning from a template resolves the variant config at write time: the spawn row
+  // carries the resolved stats so catches never depend on later template edits.
+  app.post('/admin/templates/:id/spawn', requireRole('admin'), async (req, res) => {
+    const { variant_id, marker_id, ttl_minutes } = req.body as {
+      variant_id?: string; marker_id?: string; ttl_minutes?: number;
+    };
+    if (!marker_id) {
+      res.status(400).json({ error: 'marker_id required' });
+      return;
+    }
+    const tpl = await db.query<SpeciesTemplate>(
+      'SELECT id, name, rarity, onsite_only, config, active FROM species_templates WHERE id = $1',
+      [req.params.id],
+    );
+    if (!tpl.rows[0]) {
+      res.status(404).json({ error: 'unknown template' });
+      return;
+    }
+    const template = tpl.rows[0];
+    let config = template.config;
+    let speciesId = template.id;
+    if (variant_id) {
+      const v = await db.query<SpeciesVariant>(
+        'SELECT id, template_id, name, overrides, active FROM species_variants WHERE id = $1',
+        [variant_id],
+      );
+      if (!v.rows[0]) {
+        res.status(404).json({ error: 'unknown variant' });
+        return;
+      }
+      if (v.rows[0].template_id !== template.id) {
+        res.status(400).json({ error: 'variant belongs to another template' });
+        return;
+      }
+      config = resolveVariant(template.config, v.rows[0].overrides);
+      speciesId = v.rows[0].id;
+    }
+    if (!template.active) {
+      res.status(400).json({ error: 'template is inactive' });
+      return;
+    }
+    // Runtime species row (creature_species) is keyed by template-or-variant id and stores
+    // the resolved config, so existing spawns/captures joins keep working unchanged.
+    await db.query(
+      `INSERT INTO creature_species (id, name, rarity, onsite_only)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, rarity = EXCLUDED.rarity, onsite_only = EXCLUDED.onsite_only`,
+      [speciesId, template.name, template.rarity, template.onsite_only],
+    );
+    const { rows } = await db.query(
+      `INSERT INTO spawns (marker_id, species_id, expires_at)
+       VALUES ($1, $2, now() + make_interval(mins => $3::int)) RETURNING id, marker_id, species_id, expires_at`,
+      [marker_id, speciesId, ttl_minutes ?? 30],
+    );
+    // Rare-species notification: same fire-and-forget policy as /admin/spawns.
+    const rarityThreshold = Number(process.env.RARE_SPAWN_MIN_RARITY ?? 4);
+    if (template.rarity >= rarityThreshold) {
+      const chat = process.env.RESIDENTS_CHAT_ID;
+      if (chat && /^-?\d+$/.test(chat)) {
+        sendBotMessage(Number(chat), `${template.name} (rarity ${template.rarity}) just spawned!`).catch(() => {});
+      }
+    }
+    res.status(201).json({ spawn: rows[0], resolved_config: config });
   });
 
   return app;
