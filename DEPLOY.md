@@ -258,7 +258,7 @@ Sanitiser stripped everything. Check `{sanitized: true}` in the create response.
 - [ ] Admin role manually assigned, not auto-granted
 - [ ] Backup `akiba` database daily: `pg_dump akiba > /backups/akiba-$(date +%F).sql`
 - [ ] Monitor disk: hints with HTML can grow; archive old hints or move to S3
-- [ ] Rate-limit `/auth/telegram` to avoid brute-force (nginx `limit_req`)
+- [ ] Rate-limit `/auth/telegram` to avoid brute-force — enforced in-app (fixed-window, `RATE_LIMIT_AUTH`/min/IP, default 10); nginx `limit_req` optional extra layer
 
 ---
 
