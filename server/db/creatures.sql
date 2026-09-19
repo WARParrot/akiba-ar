@@ -26,3 +26,8 @@ CREATE TABLE IF NOT EXISTS species_variants (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS species_variants_template_idx ON species_variants(template_id);
+
+ALTER TABLE spawns ADD COLUMN IF NOT EXISTS variant_name TEXT;
+ALTER TABLE spawns ADD COLUMN IF NOT EXISTS appearance JSONB;
+ALTER TABLE captures ADD COLUMN IF NOT EXISTS variant_name TEXT;
+ALTER TABLE captures ADD COLUMN IF NOT EXISTS appearance JSONB;

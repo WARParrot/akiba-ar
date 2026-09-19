@@ -1,9 +1,12 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Button, FlatList, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import * as api from './src/api';
 import type { Capture, Hint, Spawn, User } from './src/types';
+import { addMarker, updateMarker, type MarkerResult } from './src/markerState';
+import { creatureAppearance, creatureLabel } from './src/creaturePresentation';
+
 
 type Screen = 'login' | 'ar' | 'feed' | 'collection';
 
@@ -12,7 +15,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [onsite, setOnsite] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
-  const [scannedMarker, setScannedMarker] = useState('');
+  const [markers, setMarkers] = useState<MarkerResult[]>([]);
 
   useEffect(() => {
     api.init().then(() =>
@@ -59,7 +62,7 @@ export default function App() {
           <Button title="Collection" onPress={() => setScreen('collection')} />
         </View>
       </View>
-      {screen === 'ar' && <ARScreen user={user!} onsite={onsite} permission={permission} requestPermission={requestPermission} scannedMarker={scannedMarker} setScannedMarker={setScannedMarker} />}
+      {screen === 'ar' && <ARScreen user={user!} onsite={onsite} permission={permission} requestPermission={requestPermission} markers={markers} setMarkers={setMarkers} />}
       {screen === 'feed' && <FeedScreen />}
       {screen === 'collection' && <CollectionScreen />}
     </View>
@@ -67,26 +70,33 @@ export default function App() {
 }
 
 // Scenario 3: AR camera + hint discovery + scenario 4: creature spawns
-function ARScreen(p: { user: User; onsite: boolean; permission: any; requestPermission: () => void; scannedMarker: string; setScannedMarker: (m: string) => void }) {
-  const [hints, setHints] = useState<Hint[]>([]);
-  const [spawns, setSpawns] = useState<Spawn[]>([]);
-  const [showAddHint, setShowAddHint] = useState(false);
+function ARScreen(p: { user: User; onsite: boolean; permission: any; requestPermission: () => void; markers: MarkerResult[]; setMarkers: Dispatch<SetStateAction<MarkerResult[]>> }) {
+  const [addHintMarker, setAddHintMarker] = useState<string | null>(null);
+  const requestedMarkers = useRef(new Set<string>());
 
   const scan = async (markerId: string) => {
-    p.setScannedMarker(markerId);
+    if (requestedMarkers.current.has(markerId)) return;
+    requestedMarkers.current.add(markerId);
+    await loadMarker(markerId);
+  };
+
+  const loadMarker = async (markerId: string) => {
+    p.setMarkers((prev) => addMarker(prev, markerId));
     const [h, sp] = await Promise.all([
       api.markerHints(markerId).then((d) => d.hints).catch(() => []),
       p.onsite ? api.markerSpawns(markerId).then((d) => d.spawns).catch(() => []) : Promise.resolve([]),
     ]);
-    setHints(h);
-    setSpawns(sp);
+    p.setMarkers((prev) => updateMarker(prev, { markerId, hints: h, spawns: sp }));
   };
 
   const catchCreature = async (spawnId: number) => {
     try {
       const { species_id } = await api.catchSpawn(spawnId);
       alert(`Caught ${species_id}!`);
-      setSpawns((prev) => prev.filter((s) => s.id !== spawnId));
+      p.setMarkers((prev) => prev.map((marker) => ({
+        ...marker,
+        spawns: marker.spawns.filter((s) => s.id !== spawnId),
+      })));
     } catch (e) {
       alert(String(e));
     }
@@ -112,24 +122,18 @@ function ARScreen(p: { user: User; onsite: boolean; permission: any; requestPerm
           <Text style={s.scanText}>Scan a QR marker</Text>
         </View>
       </CameraView>
-      {p.scannedMarker && (
+      {p.markers.length > 0 && (
         <View style={s.panel}>
-          <Text style={s.panelTitle}>Marker: {p.scannedMarker}</Text>
-          {hints.map((h) => (
-            <HintCard key={h.id} hint={h} />
-          ))}
-          {spawns.map((sp) => (
-            <View key={sp.id} style={s.spawn}>
-              <Text>
-                {sp.name} (rarity {sp.rarity})
-              </Text>
-              <Button title="Catch" onPress={() => catchCreature(sp.id)} />
-            </View>
-          ))}
-          {p.user.role !== 'guest' && p.onsite && (
-            <Button title="+ Add Hint" onPress={() => setShowAddHint(true)} />
-          )}
-          {showAddHint && <AddHintForm markerId={p.scannedMarker} onDone={() => { setShowAddHint(false); scan(p.scannedMarker); }} />}
+          {p.markers.map((marker) => <View key={marker.markerId}>
+            <Text style={s.panelTitle}>Marker: {marker.markerId}</Text>
+            {marker.hints.map((h) => <HintCard key={h.id} hint={h} />)}
+            {marker.spawns.map((sp) => <View key={sp.id} style={[s.spawn, creatureAppearance(sp).color ? { backgroundColor: creatureAppearance(sp).color } : null]}>
+                <Text>{creatureAppearance(sp).emoji ?? ''} {creatureLabel(sp)} (rarity {sp.rarity})</Text>
+                <Button title="Catch" onPress={() => catchCreature(sp.id)} />
+              </View>)}
+            {p.user.role !== 'guest' && p.onsite && <Button title="+ Add Hint" onPress={() => setAddHintMarker(marker.markerId)} />}
+            {addHintMarker === marker.markerId && <AddHintForm markerId={marker.markerId} onDone={() => { setAddHintMarker(null); loadMarker(marker.markerId); }} />}
+          </View>)}
         </View>
       )}
     </View>
@@ -218,10 +222,8 @@ function CollectionScreen() {
     <ScrollView style={s.container}>
       <Text style={s.sectionTitle}>Your Collection</Text>
       {coll.map((c) => (
-        <View key={c.species_id} style={s.captureRow}>
-          <Text>
-            {c.name} x{c.count} (rarity {c.rarity})
-          </Text>
+        <View key={c.species_id} style={[s.captureRow, c.appearance?.color ? { backgroundColor: c.appearance.color } : null]}>
+          <Text>{c.appearance?.emoji ?? ''} {creatureLabel(c)} x{c.count} (rarity {c.rarity})</Text>
         </View>
       ))}
       <Text style={s.sectionTitle}>Leaderboard</Text>

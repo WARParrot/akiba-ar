@@ -219,7 +219,8 @@ export function createApp(db: Pool) {
   // --- Scenario 4: creatures, onsite only ---
   app.get('/markers/:id/spawns', requireOnsite, async (req, res) => {
     const { rows } = await db.query(
-      `SELECT s.id, s.marker_id, s.species_id, s.expires_at, c.name, c.rarity
+      `SELECT s.id, s.marker_id, s.species_id, s.expires_at, c.name, c.rarity,
+              s.variant_name, s.appearance
          FROM spawns s JOIN creature_species c ON c.id = s.species_id
         WHERE s.marker_id = $1 AND s.caught_by IS NULL AND s.expires_at > now()`,
       [req.params.id],
@@ -229,26 +230,28 @@ export function createApp(db: Pool) {
 
   app.post('/spawns/:id/catch', rlSpend, requireOnsite, async (req: AuthedRequest, res) => {
     // Single UPDATE claims the spawn: first writer wins, no transaction needed.
-    const { rows } = await db.query<{ species_id: string }>(
+    const { rows } = await db.query<{ species_id: string; variant_name: string | null; appearance: Record<string, unknown> | null }>(
       `UPDATE spawns SET caught_by = $2
         WHERE id = $1 AND caught_by IS NULL AND expires_at > now()
-        RETURNING species_id`,
+        RETURNING species_id, variant_name, appearance`,
       [req.params.id, req.claims!.uid],
     );
     if (!rows[0]) {
       res.status(409).json({ error: 'already caught or expired' });
       return;
     }
-    await db.query('INSERT INTO captures (user_id, species_id) VALUES ($1, $2)', [req.claims!.uid, rows[0].species_id]);
+    await db.query('INSERT INTO captures (user_id, species_id, variant_name, appearance) VALUES ($1, $2, $3, $4)', [req.claims!.uid, rows[0].species_id, rows[0].variant_name, rows[0].appearance]);
     res.status(201).json({ species_id: rows[0].species_id });
   });
 
   // Pokedex works offsite (remote mode).
   app.get('/collection', async (req: AuthedRequest, res) => {
     const { rows } = await db.query(
-      `SELECT c.species_id, s.name, s.rarity, count(*)::int AS count, max(c.caught_at) AS latest
+      `SELECT c.species_id, s.name, s.rarity, count(*)::int AS count, max(c.caught_at) AS latest,
+              c.variant_name, c.appearance
          FROM captures c JOIN creature_species s ON s.id = c.species_id
-        WHERE c.user_id = $1 GROUP BY c.species_id, s.name, s.rarity ORDER BY s.rarity DESC`,
+        WHERE c.user_id = $1
+        GROUP BY c.species_id, s.name, s.rarity, c.variant_name, c.appearance ORDER BY s.rarity DESC`,
       [req.claims!.uid],
     );
     res.json({ collection: rows });
@@ -515,6 +518,7 @@ export function createApp(db: Pool) {
     const template = tpl.rows[0];
     let config = template.config;
     let speciesId = template.id;
+    let variantName: string | null = null;
     if (variant_id) {
       const v = await db.query<SpeciesVariant>(
         'SELECT id, template_id, name, overrides, active FROM species_variants WHERE id = $1',
@@ -530,6 +534,7 @@ export function createApp(db: Pool) {
       }
       config = resolveVariant(template.config, v.rows[0].overrides);
       speciesId = v.rows[0].id;
+      variantName = v.rows[0].name;
     }
     if (!template.active) {
       res.status(400).json({ error: 'template is inactive' });
@@ -543,10 +548,11 @@ export function createApp(db: Pool) {
        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, rarity = EXCLUDED.rarity, onsite_only = EXCLUDED.onsite_only`,
       [speciesId, template.name, template.rarity, template.onsite_only],
     );
+    const appearance = (config.appearance && typeof config.appearance === "object") ? config.appearance : null;
     const { rows } = await db.query(
-      `INSERT INTO spawns (marker_id, species_id, expires_at)
-       VALUES ($1, $2, now() + make_interval(mins => $3::int)) RETURNING id, marker_id, species_id, expires_at`,
-      [marker_id, speciesId, ttl_minutes ?? 30],
+      `INSERT INTO spawns (marker_id, species_id, expires_at, variant_name, appearance)
+       VALUES ($1, $2, now() + make_interval(mins => $3::int), $4, $5::jsonb) RETURNING id, marker_id, species_id, expires_at`,
+      [marker_id, speciesId, ttl_minutes ?? 30, variantName, JSON.stringify(appearance)],
     );
     // Rare-species notification: same fire-and-forget policy as /admin/spawns.
     const rarityThreshold = Number(process.env.RARE_SPAWN_MIN_RARITY ?? 4);

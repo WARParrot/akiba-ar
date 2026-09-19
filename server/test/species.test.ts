@@ -125,7 +125,7 @@ test('#16: variant added via admin CRUD; overrides resolve against template conf
     method: 'POST', as: 'admin',
     body: {
       id: 'bytedragon-crimson', name: 'Byte Dragon — Crimson',
-      overrides: { stats: { power: 7 } },
+      overrides: { stats: { power: 7 }, appearance: { color: 'crimson', emoji: '🔥' } },
     },
   });
   assert.equal(v.status, 201);
@@ -154,11 +154,22 @@ test('#16: spawn from template carries resolved variant config at write time', a
   const mine = visible.body!.spawns.find((s: any) => s.species_id === 'bytedragon-crimson');
   assert.ok(mine, JSON.stringify(visible.body));
   assert.equal(mine.name, 'Byte Dragon');
+  assert.equal(mine.variant_name, 'Byte Dragon — Crimson');
+  assert.deepEqual(mine.appearance, { color: 'crimson', emoji: '🔥' });
+
+  // Mutable admin data must not rewrite an already-created spawn snapshot.
+  await pool.query("UPDATE species_variants SET name = 'Changed Variant', overrides = '{\"appearance\": {\"color\": \"changed\", \"emoji\": \"💥\"}}'::jsonb WHERE id = 'bytedragon-crimson'");
+  const unchanged = await api('/markers/marker-crx/spawns', { as: 'resident' });
+  const stillOriginal = unchanged.body!.spawns.find((s: any) => s.species_id === 'bytedragon-crimson');
+  assert.equal(stillOriginal.variant_name, 'Byte Dragon — Crimson');
+  assert.deepEqual(stillOriginal.appearance, { color: 'crimson', emoji: '🔥' });
 
   const catchRes = await api(`/spawns/${spawn.body!.spawn.id}/catch`, { method: 'POST', as: 'resident' });
   assert.equal(catchRes.status, 201);
   const collection = await api('/collection', { as: 'resident' });
   assert.equal(collection.body!.collection[0].species_id, 'bytedragon-crimson');
+  assert.equal(collection.body!.collection[0].variant_name, 'Byte Dragon — Crimson');
+  assert.deepEqual(collection.body!.collection[0].appearance, { color: 'crimson', emoji: '🔥' });
 });
 
 test('#16: spawn without variant uses template config; inactive template 400; cross-template variant 400', async () => {

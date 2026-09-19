@@ -54,7 +54,9 @@ CREATE TABLE IF NOT EXISTS spawns (
   marker_id  TEXT NOT NULL REFERENCES markers(id) ON DELETE CASCADE,
   species_id TEXT NOT NULL REFERENCES creature_species(id) ON DELETE CASCADE,
   expires_at TIMESTAMPTZ NOT NULL,
-  caught_by  BIGINT REFERENCES users(id)
+  caught_by  BIGINT REFERENCES users(id),
+  variant_name TEXT,
+  appearance JSONB
 );
 CREATE INDEX IF NOT EXISTS spawns_marker_idx ON spawns(marker_id) WHERE caught_by IS NULL;
 
@@ -62,5 +64,7 @@ CREATE TABLE IF NOT EXISTS captures (
   id         BIGSERIAL PRIMARY KEY,
   user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   species_id TEXT NOT NULL REFERENCES creature_species(id) ON DELETE CASCADE,
-  caught_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  caught_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  variant_name TEXT,
+  appearance JSONB
 );
