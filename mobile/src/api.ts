@@ -8,9 +8,22 @@ const REMOTE_API = 'http://127.0.0.1:3100'; // same in dev; swap for prod cloud 
 let token = '';
 let baseUrl = LOCAL_API;
 
+// Runtime override (AsyncStorage 'apiBase'): lets one APK target any on-site box
+// without a rebuild. Takes precedence over the hardcoded LOCAL_API.
+export async function setApiBase(url: string) {
+  const clean = url.trim().replace(/\/+$/, '');
+  if (clean) {
+    await AsyncStorage.setItem('apiBase', clean);
+  } else {
+    await AsyncStorage.removeItem('apiBase');
+  }
+  baseUrl = clean || LOCAL_API;
+}
+
 export async function init() {
   token = (await AsyncStorage.getItem('token')) ?? '';
-  baseUrl = (await AsyncStorage.getItem('onsite')) === 'true' ? LOCAL_API : REMOTE_API;
+  const override = await AsyncStorage.getItem('apiBase');
+  baseUrl = override ?? ((await AsyncStorage.getItem('onsite')) === 'true' ? LOCAL_API : REMOTE_API);
 }
 
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
@@ -29,6 +42,15 @@ export async function login(tgData: Record<string, unknown>): Promise<SessionInf
   await AsyncStorage.setItem('onsite', String(sess.onsite));
   baseUrl = sess.onsite ? LOCAL_API : REMOTE_API;
   return sess;
+}
+
+export async function loginWithToken(jwt: string): Promise<{ user: User; onsite: boolean }> {
+  token = jwt;
+  await AsyncStorage.setItem('token', token);
+  const d = await me();
+  await AsyncStorage.setItem('onsite', String(d.onsite));
+  baseUrl = d.onsite ? LOCAL_API : REMOTE_API;
+  return d;
 }
 
 export const me = () => req<{ user: User; onsite: boolean }>('/me');

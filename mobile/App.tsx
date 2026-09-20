@@ -16,6 +16,8 @@ export default function App() {
   const [onsite, setOnsite] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const [markers, setMarkers] = useState<MarkerResult[]>([]);
+  const [pasted, setPasted] = useState('');
+  const [server, setServer] = useState('');
 
   useEffect(() => {
     api.init().then(() =>
@@ -27,16 +29,17 @@ export default function App() {
     );
   }, []);
 
-  // Scenario 1: Telegram login stub (real app uses Telegram Login Widget WebView or deep-link flow)
-  const doLogin = async () => {
-    const mockTgData = { id: 9999, first_name: 'Demo', auth_date: Math.floor(Date.now() / 1000), hash: 'mock' };
+  // Stopgap for #6: paste a server-minted JWT (curl one-liner in DEPLOY docs) until the
+  // real Telegram Login Widget lands. Same session persistence as api.login().
+  const pasteLogin = async () => {
     try {
-      const sess = await api.login(mockTgData);
-      setUser(sess.user);
-      setOnsite(sess.onsite);
+      await api.setApiBase(server);
+      const d = await api.loginWithToken(pasted.trim());
+      setUser(d.user);
+      setOnsite(d.onsite);
       setScreen('ar');
     } catch (e) {
-      alert('Login failed (backend needs TELEGRAM_BOT_TOKEN)');
+      alert('Login failed: ' + String(e));
     }
   };
 
@@ -45,7 +48,24 @@ export default function App() {
       <View style={s.center}>
         <Text style={s.title}>Akiba AR</Text>
         <Text style={s.sub}>Connect to Hackerspace WiFi for full access</Text>
-        <Button title="Login (mock)" onPress={doLogin} />
+        <TextInput
+          placeholder="Server: http://<box-ip>:3100"
+          value={server}
+          onChangeText={setServer}
+          style={s.input}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <TextInput
+          placeholder="Paste token (minted on server)"
+          value={pasted}
+          onChangeText={setPasted}
+          style={s.input}
+          multiline
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <Button title="Login with token" onPress={pasteLogin} />
       </View>
     );
   }
