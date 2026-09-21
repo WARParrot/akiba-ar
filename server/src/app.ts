@@ -39,7 +39,14 @@ export function createApp(db: Pool) {
       res.status(401).json({ error: 'bad telegram signature' });
       return;
     }
-    const role: Role = (await isChannelMember(body.id)) ? 'resident' : 'guest';
+    // Telegram outage / broken egress DNS must not take the whole API down (#42 follow-up):
+    // degrade to guest instead of crashing (unhandled rejection kills Node 20).
+    let role: Role = 'guest';
+    try {
+      role = (await isChannelMember(body.id)) ? 'resident' : 'guest';
+    } catch (err) {
+      console.error('isChannelMember failed, defaulting to guest:', (err as Error).message);
+    }
     const nickname = body.username ?? body.first_name ?? `tg${body.id}`;
     // Existing admins keep their manually granted role.
     const { rows } = await db.query<User>(
